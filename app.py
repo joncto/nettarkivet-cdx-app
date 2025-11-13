@@ -1,17 +1,4 @@
 #!/usr/bin/env python3
-"""
-This app:
-- takes as input a list of URLs,
-- uses pywb's CDX Server API to query nettarkivet's index,
-- check if each URL is indexed,
-- counts the number of indexed captures for each URL,
-- creates a link to replay of each URL,
-- outputs results as an Excel file
-
-Input format:
-- pasted text with one URL per line, or
-- .txt with one URL per line.
-"""
 
 import argparse
 import csv
