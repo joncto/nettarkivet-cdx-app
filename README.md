@@ -17,7 +17,7 @@ The app is hosted [online at Streamlit](https://nlnwa-check-urls.streamlit.app/)
 ### Run app
 3. First, you need to install dependencies. In your terminal, type:
 ```python3
-pip install requirements.txt
+pip install -r requirements.txt
 ```
 
 4. Now, run the app by typing:
@@ -37,4 +37,3 @@ Make sure that you only have one URL per line, and not to add any commas in the 
 When you are ready, press the button **"Slå opp URLer".**
 
 3. Open your terminal and navigate to the app's location
-    
