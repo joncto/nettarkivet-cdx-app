@@ -1,109 +1,88 @@
 #!/usr/bin/env python3
 
-import argparse
-import csv
-from urllib.parse import urlencode
-import requests
 import io
+import json
+from urllib.parse import urlencode
 import pandas as pd
+import requests
 import streamlit as st
 
 
 CDX_BASE = "https://nettarkivet.nb.no/search/cdx"
-REPLAY_BASE = "https://nettarkivet.nb.no/search/*/"
+REPLAY_BASE = "https://nettarkivet.nb.no/search/"
 
 
 def build_cdx_url(original_url: str) -> str:
     """
-    Take URL as input and builds a CDX query URL asking for json formatted responses.
+    Takes a URL as input and
+    returns a CDX query URL that will request a JSON response from nettarkivet's CDX Server API.
     """
     params = {"url": original_url, "output": "json"}
     return f"{CDX_BASE}?{urlencode(params)}"
 
 
-def build_replay_url(original_url: str) -> str:
+def query_cdx(original_url: str) -> tuple[int, str | None]:
     """
-    Takes URL as input and constructs a replay URL.
+    Takes a CDX query URL, sends a request to nettarkivets CDX Server API, then
+    extracts information from the JSON response and
+    returns the number of indexed versions and the value of the earliest timestamp (if any).
     """
-    return f"{REPLAY_BASE}{original_url}"
-
-
-def count_cdx_hits(cdx_url: str) -> int:
-    """
-    Query pywb's CDX Server API and, for each JSON response, counts the number of indexed captures.
-    """
+    cdx_url = build_cdx_url(original_url)
     resp = requests.get(cdx_url, timeout=30)
     resp.raise_for_status()
 
-    return sum(1 for line in resp.text.splitlines() if line.strip())
+    timestamps: list[str] = []
 
+    for line in resp.text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
 
-def read_urls(path: str):
-    """Read URLs from file, strip any leading or trailing whitespace."""
-    cleaned = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            url = line.strip()
-            if not url:
-                continue
-
-            cleaned.append(url)
-    return cleaned
-
-
-def write_csv(path: str, rows: list[tuple]) -> None:
-    """
-    Write rows to CSV with two 'columns' (url, count)
-    """
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["url", "indexed", "versions", "replay_url"])
-        writer.writerows(rows)
-
-
-# Old code for CLI interface
-
-def cli_main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("input", help="Tekstfil med én URL per linje")
-    parser.add_argument("-o", "--output", default="cdx_counts.csv")
-    args = parser.parse_args()
-
-    urls = read_urls(args.input)
-    results = []
-
-    for url in urls:
-        cdx_url = build_cdx_url(url)
-        replay_url = build_replay_url(url)
         try:
-            count = count_cdx_hits(cdx_url)
-        except Exception as e:
-            print(f"Error on {cdx_url}: {e}")
-            count = 0
+            rec = json.loads(line)
+        except json.JSONDecodeError:
+            continue
 
-        indexed = "YES" if count > 0 else "NO"
-        # url, indexed, versions, replay_url
-        results.append((url, indexed, count, replay_url))
+        if isinstance(rec, dict):
+            ts = rec.get("timestamp")
+            if ts:
+                timestamps.append(str(ts))
 
-    write_csv(args.output, results)
-    print(f"Ferdig. Skrev {len(results)} rader til {args.output}")
+    if not timestamps:
+        return 0, None
+
+    return len(timestamps), min(timestamps)
+
+
+def build_replay_url(original_url: str, timestamp: str | None) -> str | None:
+    """
+    Takes a URL and timestamp, combines them with the replay base URL, then
+    returns a valid link to view URL in replay.
+    """
+    if not timestamp:
+        return None
+    return f"{REPLAY_BASE}{timestamp}/{original_url}"
 
 
 def main():
-    # --- Streamlit UI ---
+    # Streamlit UI
     st.set_page_config(
         page_title="Slå opp i nettarkivet",
-        page_icon="🔎",
-        layout="wide",
+        page_icon="⚙️",
+        # layout="wide",
     )
 
-    st.title("Slå opp URLer i Nettarkivets indeks")
+    st.title("Slå opp URLer i nettarkivets indeks")
 
     st.markdown(
         """
-        Last opp en tekstfil med én URL per linje **eller** lim inn URLer i tekstfeltet under.
-        Trykk på **«Slå opp URLer»** for å se om adressen finnes i indeks for offentlig visning,
-        og evt. hvor mange versjoner som finnes i URLene mot Nettarkivets CDX-tjeneste.
+        Denne webappen lar deg sjekke om en URL er indeksert til visning i nettarkivet.
+        
+        Du kan både:
+
+        a) Laste opp en tekstfil (.txt) med én URL per linje,
+
+        b) Lime inn URLer i tekstfeltet under, men én URL per linje.
         """
     )
 
@@ -122,17 +101,18 @@ def main():
     if not start:
         return
 
-    # --- Samle URLer fra fil og tekstfelt ---
+
+    # Collect URLs from file and text input
     urls: list[str] = []
 
-    # Fra opplastet fil
+    # From uploaded file
     if uploaded_file is not None:
         for raw_line in uploaded_file:
             line = raw_line.decode("utf-8", errors="ignore").strip()
             if line:
                 urls.append(line)
 
-    # Fra tekstfelt
+    # From text input
     if pasted_urls_text.strip():
         for line in pasted_urls_text.splitlines():
             url = line.strip()
@@ -143,7 +123,7 @@ def main():
         st.warning("Ingen URLer funnet. Last opp en fil eller lim inn URLer.")
         return
 
-    max_rows_to_display = 800
+    max_rows_to_display = 200
 
     st.info(f"Fant {len(urls)} URLer. Slår opp i indeksen ...")
 
@@ -153,17 +133,14 @@ def main():
     total = len(urls)
 
     for i, url in enumerate(urls, start=1):
-        cdx_url = build_cdx_url(url)
-        replay_url = build_replay_url(url)
-
         try:
-            count = count_cdx_hits(cdx_url)
+            count, earliest_ts = query_cdx(url)
         except Exception:
-            count = 0
+            count, earliest_ts = 0, None
 
-        indexed = "YES" if count > 0 else "NO"
+        replay_url = build_replay_url(url, earliest_ts)
+        indexed = "JA" if count > 0 else "NEI"
 
-        # Order: URL, Indexed, Versions, Replay
         results.append(
             {
                 "URL": url,
@@ -181,7 +158,7 @@ def main():
 
     st.success(f"Ferdig! Slått opp {total} URLer.")
 
-    # --- Lag DataFrame og vis tabell (opptil 800 rader) ---
+    # Generate DataFrame and show table
     df = pd.DataFrame(results, columns=["URL", "Indexed", "Versions", "Replay"])
 
     if len(df) > max_rows_to_display:
@@ -199,13 +176,13 @@ def main():
         use_container_width=True,
         column_config={
             "Replay": st.column_config.LinkColumn(
-                "Replay",  # column label
-                display_text="Åpne i nettarkivet",  # link text in the table
-                    )
-                },
+                "Replay",
+                display_text="Åpne i visning",
             )
+        },
+    )
 
-    # --- Excel-nedlasting ---
+    # Excel download
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="CDX counts")
@@ -222,13 +199,5 @@ def main():
         ),
     )
 
-
 if __name__ == "__main__":
-    # For å starte appen lokalt, åpne en terminal, gå til lokasjonen for fila og kjør kommandoen:
-    #   `streamlit run app.py``
-    #
-    # Hvis du fortsatt vil bruke CLI-versjonen i terminalen,
-    # kan du bytte til cli_main() her i stedet.
     main()
-    # Eller, for CLI:
-    # cli_main()
